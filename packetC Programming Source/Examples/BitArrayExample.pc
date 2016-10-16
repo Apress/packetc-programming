@@ -1,0 +1,53 @@
+// ***************************************************************************
+//  BitArraySample.ph
+// ------------
+// Author(s)   : dW!GhT
+// Date Created: 05/01/2011
+// Version     : 1.00
+// **************************************************************************
+//  Description: This provides a sample of how to use the BitArray.ph
+// **************************************************************************
+packet module Sample_bitArray;
+
+#include "BitArray.ph"
+#define BIGBITARRAY_SIZE 256
+BIT_ARRAY( bigBitArray, BIGBITARRAY_SIZE );
+
+void main( $PACKET pkt, $SYS sys, $PIB pib ) {
+  int  myBit;
+
+  // Set a couple of bits
+  SET_BIT(bigBitArray, 48);
+  SET_BIT(bigBitArray, 49);
+  SET_BIT(bigBitArray, 132);
+
+  // Get the value of a couple of bits
+  myBit = GET_BIT(bigBitArray, 40);    // == 0
+  myBit = GET_BIT(bigBitArray, 48);    // == 1
+  myBit = GET_BIT(bigBitArray, 49);    // == 1
+  myBit = GET_BIT(bigBitArray, 50);    // == 0
+  myBit = GET_BIT(bigBitArray, 132);   // == 1
+
+  // Flip a bit
+  TOGGLE_BIT(bigBitArray,40);
+  myBit = GET_BIT(bigBitArray, 40);    // == 1
+
+  // Clear a bit
+  CLEAR_BIT(bigBitArray, 32);
+  myBit = GET_BIT(bigBitArray, 32);    // == 0
+
+  // Find the position of set bits
+  int iterPosition = 0;
+  NEXT_SET_BIT( bigBitArray, iterPosition );     // == 40
+  NEXT_SET_BIT( bigBitArray, iterPosition );     // == 48
+  NEXT_CLEARED_BIT( bigBitArray, iterPosition ); // == 50
+  NEXT_SET_BIT( bigBitArray, iterPosition );     // == 132
+
+  // The next two test for out of bounds conditions
+  NEXT_SET_BIT( bigBitArray, iterPosition );     // == 257 (OUT OF BOUNDS)
+  NEXT_CLEARED_BIT( bigBitArray, iterPosition ); // == 287 (OUT OF BOUNDS)
+
+  // We are just forwarding packets
+  pib.action = FORWARD_PACKET;
+}
+

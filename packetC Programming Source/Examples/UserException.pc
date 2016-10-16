@@ -1,0 +1,70 @@
+// **************************************************************************
+// UserException.pc - Main file for demoing UserException throws.
+// ------------
+// Author(s)   : dWiGhT
+// Date Created: 01/18/2012  
+// Version     : 1.00
+// **************************************************************************
+// Description: This project provides a simple example of how to use User
+//              Exceptions throw across function scopes.
+// ***************************************************************************
+packet module User_Exception;
+
+// ***************************************************************************
+// Include supporting header files
+// ***************************************************************************
+#include <cloudshield.ph>       
+
+// ***************************************************************************
+// Create a user exception
+// ***************************************************************************
+const Exception   ERR_USER_EXCEPTION  = ERR_LAST_DEFINED + 1;
+
+// ***************************************************************************
+// Macros that help throw exceptions over scopes.
+// ***************************************************************************
+#define CATCH_THROWS(X,Y)   \
+  if ( X == true ) throw Y
+
+#define FUNC_THROWS(X,Y,Z)        \
+bool X {                          \
+  bool  exceptionThrown = false;  \
+  try Z                           \
+  catch ( Y ) {                   \
+    exceptionThrown = true;       \
+  }                               \
+  return exceptionThrown;         \
+}
+
+// ***************************************************************************
+// This defines a function that just throws an user created exception that
+// can be catched by the calling scope.
+// ***************************************************************************
+FUNC_THROWS( myFunc_ThrowsUserException(), ERR_USER_EXCEPTION,   
+  {
+    throw ERR_USER_EXCEPTION;
+  }
+)
+
+// ***************************************************************************
+// Main code block
+// ***************************************************************************
+void main($PACKET pkt, $PIB pib, $SYS sys)
+{
+  // Wrap this scope with error catching
+  try {
+    
+  // Assume we are forwarding all packets
+  pib.action = FORWARD_PACKET;
+  
+  CATCH_THROWS( myFunc_ThrowsUserException(), ERR_USER_EXCEPTION );
+  
+  // Error handling for main scope
+  }
+  catch (ERR_USER_EXCEPTION) {
+    // do something interesting
+    pib.action = DROP_PACKET;
+  }
+  
+}
+

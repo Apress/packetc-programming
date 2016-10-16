@@ -1,0 +1,47 @@
+// **************************************************************************
+// Base64Sample.pc
+// ------------
+// Author(s)   : dW!GhT
+// Date Created: 03/01/2011
+// Version     : 1.00
+// **************************************************************************
+// Description: This project provides a simple example of how to use FAST UDP.
+//
+// ***************************************************************************
+packet module Sample_Base64;
+
+// ***************************************************************************
+// Include supporting header files
+// ***************************************************************************
+#include <cloudshield.ph>
+
+// ***************************************************************************
+// Set up string to encode
+// ***************************************************************************
+byte encodeThis[] =
+   "A towel … is about the most massively useful thing an interstellar hitch hiker can have.";
+byte b64String[((sizeof(encodeThis)/3)*4)+4*((sizeof(encodeThis)%3)>0)] = {0};
+#define BASE64_ENCODED_STRING  b64String
+#define BASE64_STRING          encodeThis
+#include "base64.ph"
+
+// ***************************************************************************
+// Main code block
+// ***************************************************************************
+void main($PACKET pkt, $PIB pib, $SYS sys)
+{
+  // Assume we are forwarding all packets
+  pib.action = FORWARD_PACKET;
+
+  // Encode the string encodeThis into the b64String
+  int  encodedSize;
+  encodedSize = base64Encode( sizeof(encodeThis) );
+
+  // Clear out the string that we encoded
+  encodeThis #= 0;
+
+  // Decode the b64String to the encodeThis string
+  int  decodedSize;
+  decodedSize = base64Decode( BASE64_ENCODED_SIZE() );
+}
+

@@ -1,0 +1,24 @@
+// ***************************************************************************
+//  ShortArraySample.pc
+//  Short sample showing how to use ShortArray.ph
+// ***************************************************************************
+packet module shortArrayTest;
+
+// Allocate the short global array
+#include "shortArray.ph"
+#define SHORTARRAY_SIZE 1024
+SHORT_ARRAY( shortArray, SHORTARRAY_SIZE ); 
+
+void main( $PACKET pkt, $SYS sys, $PIB pib ) {
+  short shorty;
+
+  // Set a couple of values 
+  SET_SHORT(shortArray, 12, 0xbabe );
+  SET_SHORT(shortArray, 13, 0xcafe );
+
+  //  Retrieve a couple of values
+  shorty = GET_SHORT(shortArray,12);
+  shorty = GET_SHORT(shortArray,13);
+
+  pib.action = FORWARD_PACKET;
+}

@@ -1,0 +1,47 @@
+// **************************************************************************
+// StackSample.pc - Main file for using Stack.ph.
+// ------------
+// Author(s)   : dW!GhT
+// Date Created: 01/11/2012
+// Version     : 1.00
+// **************************************************************************
+// Description: This project provides a simple example of how to use Stack.ph.
+// 
+// ***************************************************************************
+packet module Sample_Stack;
+
+// ***************************************************************************
+// Include supporting header files
+// ***************************************************************************
+#include <cloudshield.ph>
+#include "stack.ph"
+
+// ***************************************************************************
+// Main code block
+// ***************************************************************************
+void main($PACKET pkt, $PIB pib, $SYS sys)
+{
+  // Assume we are forwarding all packets
+  pib.action = FORWARD_PACKET;
+
+  //===== stack Stuff
+  STACK_PUSH(10);
+  STACK_PUSH(101);
+  STACK_PUSH(1011);
+
+  int szStack;
+  szStack = STACK_SIZE();
+
+  int x;
+  x = STACK_TOP();
+  STACK_POP();
+  STACK_POP();
+  STACK_POP();
+  STACK_POP();
+
+  if ( !STACK_EMPTY() ) {
+    pib.action = DROP_PACKET;
+  }
+
+}
+

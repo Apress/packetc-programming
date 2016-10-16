@@ -1,0 +1,153 @@
+// **************************************************************************
+// NewSamplePacketCProject.pc - Main file for the Classifier (cl) project.
+// ------------
+// Author(s)   : Cloudshield Technologies 
+// Date Created: Sat 09 Sep 2008 04:00:00 PM EDT
+// Checked in  : $Date: 2011/03/18 13:52:28 $
+// Version     : $Revision: 1.13 $
+// **************************************************************************
+// Description: This project provides a simple classifier.
+// 
+//      Received packets are classified based on the following
+//      packet field values:
+//       
+//      - Ethertype
+//      - ARP Opcode
+//      - IP4 Protocol
+//      - IP6 Next Header
+//      - ICMP4 Type
+//      - ICMP6 Type
+//      - TCP Port
+//      - UDP Port
+//       
+//      Global classification counters are maintained as follows
+//       
+//      - clEthertype_: Number of packets by Ethertype
+//      - clArpOpcode_: Number of packets by ARP opcode
+//      - clIp4Protocol_:  Number of IP4 packets by protocol
+//      - clIp6NextHeader_: Number of IP6 packets by next header
+//      - clIcmp4Type_: Number of ICMP4 packets by type
+//      - clIcmp6Type_: Number of ICMP6 packets by type
+//      - clTcpWKPort_: Number of TCP packets by well known port number,
+//       index 0 incremented for ports greater than 1024
+//      - clUdpWKPort_: Number of UDP packets by well known port number,
+//       index 0 incremented for ports greater than 1024
+//      
+//      Received packets are evaluated against an array that lists
+//      output ports by input port.  If an assigned output port is
+//      within the valid range of port numbers, the packet is
+//      forwarded out that port. If an assigned output port is
+//      outside the valid range of ports, the packet is dropped.
+//       
+//      Global IO counters are maintained as follows:
+//       
+//      - IoFoward_: Number of packets forwarded
+//      - IoDrop_: Number of packets dropped
+// 
+// ****************************************************************************
+
+// ****************************************************************************
+// Scope declaration
+// ****************************************************************************
+packet module sampleProject;
+
+// ****************************************************************************
+// Include supporting header files
+// ****************************************************************************
+#include <protocols.ph>
+#include "NewSamplePacketCProject-io.ph"
+#include "NewSamplePacketCProject.ph"
+
+// ****************************************************************************
+//
+//                  Main code block
+//
+// ****************************************************************************
+void main($PACKET pkt, $PIB pib, $SYS sys)
+{
+  // Get ethertype and increment ethertype counter array
+  EthernetType  ethertype;
+  ethertype = ethernet.type;
+  ++clEthertype_[ RAW_SHORT(ethertype) ];
+
+  // Classify packet based on ethertype
+  switch (ethertype)
+  {
+  case ETHERNET_TYPE_IP:
+    // Get ip4 protocol value and increment protocol array
+    IpProtocol    protocol;
+    protocol = ipv4.protocol;
+    ++clIp4Protocol_[ RAW_BYTE(protocol) ];
+
+    // Classify packet based on protocol
+    switch (protocol) 
+    {
+    case IP_PROTOCOL_TCP:
+      // Increment tcp well know port array,
+      // Increment element zero if above 1024 
+      INCREMENT_PORT_STATS( tcp, clTcpWKPort_ );
+      break;
+
+    case IP_PROTOCOL_UDP:
+      // Increment udp well know port array,
+      // Increment element zero if above 1024 
+      INCREMENT_PORT_STATS( udp, clUdpWKPort_ );
+      break;
+
+    case IP_PROTOCOL_ICMP:
+      // Increment icmp4 type array,
+      ++clIcmp4Type_[ icmp.type ];
+      break;
+
+    default:
+      // fall through
+    }
+    break;
+
+  case ETHERNET_TYPE_IP6:
+    // Get ip6 next header value and increment next header array
+    IpProtocol    nextHeader;
+    nextHeader = ipv6.protocol;
+    ++clIp6NextHeader_[ RAW_BYTE(nextHeader) ];
+
+    // Classify packet based on next header
+    switch (nextHeader)
+    {
+    case IP_PROTOCOL_TCP:
+      // Increment tcp well know port array,
+      // Increment element zero if above 1024 
+      INCREMENT_PORT_STATS( tcp, clTcpWKPort_ );
+      break;
+
+    case IP_PROTOCOL_UDP:
+      // Increment udp well know port array,
+      // Increment element zero if above 1024 
+      INCREMENT_PORT_STATS( udp, clUdpWKPort_ );
+      break;
+
+    case IP_PROTOCOL_IPV6:
+      // Increment icmp6 type array,
+      ++clIcmp6Type_[ icmpv6.type ];
+      break;
+
+    default:
+      // fall through
+    }
+    break;
+
+  case ETHERNET_TYPE_ARP:
+    // Get arp opcode value and increment opcode array
+    ArpOpcode     opcode;
+    opcode = arp.opcode;
+    ++clArpOpcode_[ RAW_SHORT(opcode) ];
+    break;
+
+  default:
+    // fall through
+  }
+
+  // Set outport port,
+  // Set action to FORWARD_PACKET
+  // Increment IoForward counter
+  FORWARD_IO( pib, sys );
+}

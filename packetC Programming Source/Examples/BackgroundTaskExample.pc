@@ -1,0 +1,145 @@
+// **************************************************************************
+// CleanDbTask.pc -
+// ------------
+// Author(s)   : dW!GhT
+// Date Created: 08/05/2011  
+// Version     : 1.00
+// **************************************************************************
+// Description: Used to show how to create an background task.
+// 
+// ***************************************************************************
+packet module Sample_StreamBuffer;
+
+// ***************************************************************************
+// Include supporting header files
+// ***************************************************************************
+#include <cloudshield.ph>                 
+#include <protocols.ph>
+
+// ***************************************************************************
+// :NOTE: This is prototyped here but you will have to supply a hardward
+//        specific function call to return a timer value.
+// ***************************************************************************
+int getTimer();
+
+// Structure of database record used to store flow info
+struct FlowRec {
+  int     srcIP;  
+  int     dstIP;  
+  int     expireTime;
+};
+
+// Database that stores the FlowRec info for quick lookups.
+#define FLOWMGMT_FLOWSIZE  10*1024
+database  FlowRec  flows[FLOWMGMT_FLOWSIZE];
+record    FlowRec  flowRec;
+
+// User Created Exceptions
+const Exception   CLEANING_DATABASE     = ERR_LAST_DEFINED + 1;
+
+// ***************************************************************************
+// Background task that will prune the database of flows that have "aged" out.
+// ***************************************************************************
+int   LastRowCleaned_ = 0;
+
+void  cleanDatabase() {
+  try {
+    // Increament and check to see if we have to loop around to the start
+    ++LastRowCleaned_;
+    if ( LastRowCleaned_ >= FLOWMGMT_FLOWSIZE ) {
+      LastRowCleaned_ = 0;
+    }
+
+    // See if this row needs to be deleted
+    if ( flows[LastRowCleaned_].data.expireTime < getTimer() ) {
+      flows[LastRowCleaned_].delete();  // Throws ERR_DB_READ
+    }
+  }
+  catch (ERR_DB_READ) {
+    // Record not found when trying to delete, just move to the next record
+  }
+  
+  return;
+}
+
+// Make the cleanDatabase() routine a background task
+#define BGTASK_FUNCTION_CALLBACK  cleanDatabase()
+#include "backgroundTask.ph" 
+
+// ***************************************************************************
+// Main code block
+// ***************************************************************************
+void main($PACKET pkt, $PIB pib, $SYS sys)
+{
+  try {
+    // Test to see if we are cleaning the database, 
+    if ( runBackgroundTask() == true ) {
+      throw CLEANING_DATABASE;
+    }
+    
+    // Assume we are forwarding all packets
+    pib.action = FORWARD_PACKET;
+    
+    // Masks that are used for database searches/insertions
+    const FlowRec  searchMask = { ~0, ~0, 0 }; 
+    const FlowRec  insertMask = { ~0, ~0, ~0 }; 
+  
+    // We only deal with IPV4 flows
+    if ( ethernet.type == ETHERNET_TYPE_IP ) {
+      flowRec.srcIP = ipv4.sourceAddress;
+      flowRec.dstIP = ipv4.destinationAddress;
+
+      // Get the record (flowNum) that this flow is stored in the 
+      // database.  If we don't find one then we insert it and init 
+      // the associated sequence array.
+      int  flowNum;
+      try {
+        // See if we have this flow in the database already
+        flowRec.mask = searchMask;
+        flowNum = flows.match(flowRec);   // Throws ERR_DB_NOMATCH
+        
+        // Match... update the flow with new expire time
+        flowRec.mask = insertMask;
+        flowRec.expireTime = getTimer() + 5;
+        flows[flowNum] = flowRec;
+      }
+      catch (ERR_DB_NOMATCH) {
+        // No Match... insert flow into db
+        // Update the expire time
+        flowRec.mask = insertMask;
+        flowRec.expireTime = getTimer() + 5;
+        flowNum = flows.insert( flowRec );  // Throws ERR_DB_FULL
+      }
+      
+      //
+      // Check the TCP Flags for FIN.  If so then we search the
+      // assembled packet for the regex we have loaded.
+      //
+      if ( tcp.flags.fin ) {
+        // Remove this from the database
+        flows[flowNum].delete();
+      }  // if ( flowRec.tcpFlags | 0x1 ) {
+    }  // if ( ethernet.type == ETHERNET_TYPE_IP ) {
+  
+  }  
+  
+  // =========================================================================
+  // 
+  // Exception handling routines. 
+  //
+  // These mostly just handle increamenting stats on the failures of 
+  // critical sections of the code.
+  // 
+  // =========================================================================
+  catch (ERR_DB_FULL) {
+    // Nothing to do
+  }
+  catch (CLEANING_DATABASE) {
+    // If we are cleaning a database then this was a replica
+    // so we just drop it.
+    pib.action = DROP_PACKET;
+  }
+ 
+  // FIN.
+}
+

@@ -1,0 +1,138 @@
+// **************************************************************************
+// Sample-ArpPing.pc - Main file for the Example Arp/Ping program.
+// ------------
+// Author(s)   : dWiGhT                     
+// Date Created: 03/01/2011  
+// Version     : 1.00
+// **************************************************************************
+// Description: This project provides a simple example of how to use ARP and
+//              ping along with showing how an UDP packet can be used to
+//              communicate commands to the main processor.
+// 
+// ***************************************************************************
+ 
+packet module Sample_ARP_PING;
+
+// ***************************************************************************
+// Include supporting header files
+// ***************************************************************************
+#include <cloudshield.ph>
+#include "ClassifyPacket.ph"
+#include "UdpProcessor.ph" 
+
+// ***************************************************************************
+// Define constants used to define this box
+// ***************************************************************************
+
+// IP that this application responses to
+#define ARPPING_IPADDR  10.101.1.241
+
+// 00:0B:A9:Fn:nn:nn – Is allocated to packetC developer private internal 
+// cabinet addressing.  This is documented as a CloudShield private 
+// address similar to RFC1918 IP addresses.
+//
+// Define this uniquely in the form 00:0B:A9:Fn:nn:nn
+//
+// MAC id of this box that you want this to be identified as
+#define ARPPING_MACID  0x00, 0x0B, 0xA9, 0xF1, 0x23, 0x45
+
+// :NOTE: ArpPing.ph will error out if either of the above are not defined!!!
+#include "ArpPing.ph"
+
+// UDP port that this will respond to.
+int        CMD_UDP_PORT = 31337;          
+
+
+// ***************************************************************************
+// Define the global variables that track the type of packets processed
+// ***************************************************************************
+
+// Global variables that track number of packets processed in types
+int totalPktsProcessed_ = 0;
+%pragma control totalPktsProcessed_ (export);
+int cmdPktsProcessed_ = 0;
+%pragma control cmdPktsProcessed_ (export);
+int arpPktsProcessed_ = 0;
+%pragma control arpPktsProcessed_ (export);
+int pingPktsProcessed_ = 0;
+%pragma control pingPktsProcessed_ (export);
+
+// ***************************************************************************
+// Helper function to determine if this packet is directed at "me".  Note 
+// this "borrows" the use of the ARPPING defines.  Reuse at its best.
+// ***************************************************************************
+const byte MyMacId_[6] = { ARPPING_MACID };
+bool  ThisIsForMe() {
+  bool  thisIsForMe = false;
+  
+  if (ethernet.destinationAddress == (MacAddress)MyMacId_ ) 
+    if ( ipv4.destinationAddress == (IpAddress)ARPPING_IPADDR ) {
+      thisIsForMe = true;
+  }
+  return thisIsForMe;
+}
+
+
+// ***************************************************************************
+// Main code block
+// ***************************************************************************
+void main($PACKET pkt, $PIB pib, $SYS sys)
+{
+  // We will only respond to traffic we are interested in, send the rest on.
+  pib.action = FORWARD_PACKET;  
+  
+  ++totalPktsProcessed_;
+
+  // Determine the packet type
+  PktType  pktType;
+  pktType = classifyPacket(); 
+  
+  switch ( pktType ) {
+  
+  // ********************
+  //    PING request
+  // ********************
+  case (PKTTYPE_PING_REQUEST):
+    // Process the PING request with a reply
+    if ( HandlePingRequest() == true ) {
+      // Increment the number of these packets processed
+      ++pingPktsProcessed_;
+    }
+    break;
+
+  // ********************
+  //      ARP request
+  // ********************
+  case (PKTTYPE_ARP_REQUEST):
+    if ( HandleArpRequest() == true ) {
+      // Increment the number of these packets processed
+      ++arpPktsProcessed_;
+    }
+    break;
+
+  // ********************
+  //      UDP packet
+  // ********************
+  case (PKTTYPE_UDP):
+    // We only accept UDP packets on a special port addressed to our
+    // ip adress, macId and UDP port.
+    if ( ThisIsForMe() == true )
+      if ( udp.destinationPort == (short)CMD_UDP_PORT )
+        if ( udp.sourcePort == (short)CMD_UDP_PORT ) {
+        // Increment the number of these packets processed
+        ++cmdPktsProcessed_;
+        
+        // The read_counter command is the only one we send back a reply
+        if ( HandleUdp() != CMDTYPE_READ_COUNTER ) {
+          // We want to drop these control packets
+          pib.action = DROP_PACKET;
+        }
+    } 
+    break;
+
+  default:
+    // We don't do anything with this type of packet.
+    // Drop through.
+  }
+  
+}

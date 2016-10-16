@@ -1,0 +1,319 @@
+// **************************************************************************
+// StreamBufferSample.pc - 
+// ------------
+// Author(s)   : dW!GhT
+// Date Created: 08/01/2011  
+// Version     : 1.00
+// **************************************************************************
+// Description: This project provides a simple example of how to use the 
+//              streambuffer to assemble a flow and search it.
+//
+//              Based in Streambuffer.csm example included with RAVE.
+// 
+// ***************************************************************************
+packet module Sample_StreamBuffer;
+
+// ***************************************************************************
+// Include supporting header files
+// ***************************************************************************
+#include <cloudshield.ph>                 
+#include <protocols.ph>
+
+// ***************************************************************************
+// :NOTE: This is prototyped here but you will have to supply a hardward
+//        specific function call to return a timer value.
+// ***************************************************************************
+int getTimer();
+
+// Number of flows to watch over
+#define  FLOWMGMT_FLOWSIZE   10000
+
+// Max size of flows we can assemble
+#define  SB_STREAMSIZE       65536
+
+// Define the maxium size of the streambuffer
+#define  MAX_STREAMBUFFER_SIZE  1000*1000*390
+
+// Global debug exports
+int  DbgUpdateFailures_ = 0;
+%pragma control DbgUpdateFailures_ (export);
+int  DbgSearchMatches_ = 0;
+%pragma control DbgSearchMatches_ (export);
+int  DbgSearches_ = 0; 
+%pragma control DbgSearches_ (export);
+int  DbgSearchOffsets_[100]= { 100 #0 };
+%pragma control DbgSearchOffsets_ (export);
+int  DbgBufferOverflows_ = 0; 
+%pragma control DbgBufferOverflows_ (export);
+int DbgBadStreamOffsets_ = 0;
+%pragma control DbgBadStreamOffsets_ (export);
+
+
+// Array of indices into the streambuffer
+int  SequenceBase_[ FLOWMGMT_FLOWSIZE ];
+// Array of locks used to access streambuffer
+int  BufferLock_[ FLOWMGMT_FLOWSIZE ] = {FLOWMGMT_FLOWSIZE #0};
+
+// Number of possible ports packets can come in on
+// If the output port is set to this, the packet should be dropped.
+#define ROUTING_NUM_PORTS   20
+#define ROUTING_IGNORE      255
+int  Routing_OutputPorts_[ROUTING_NUM_PORTS] = { 1, 0, 3, 2, 255 };
+
+// SearchSet used to search the streambuffer, defined as regex
+regex searchset  SbSearch[2][11] = { ".*?reserved" };
+%pragma datatype SbSearch (regex1);
+
+// Structure of database record used to store flow info
+struct FlowRec {
+  int     srcIP;  
+  int     dstIP;  
+  union Shared {
+    int  full;
+    struct TcpUdp  {
+      short     srcPort;  
+      short     dstPort;  
+    } tcpUdp;
+    struct Icmp  {
+      IcmpType  type;  
+      byte      code;  
+    } icmp;
+  } info;
+  IpProtocol  protocol;
+  byte    tcpFlags;  
+  short   expireTime;
+};
+
+// Database that stores the FlowRec info for quick lookups.
+database  FlowRec  flows[FLOWMGMT_FLOWSIZE];
+record    FlowRec  flowRec;
+
+// User Created Exceptions
+const Exception   ERR_BAD_STREAM_OFFSET = ERR_LAST_DEFINED + 1;
+const Exception   ERR_BUFFER_OVERFLOW   = ERR_LAST_DEFINED + 2;  
+const Exception   CLEANING_DATABASE     = ERR_LAST_DEFINED + 3;
+
+// ***************************************************************************
+// Background task that will prune the database of flows that have "aged" out.
+// 
+// :NOTE: A replica is floated that is used to drive this process.  By 
+//        floating one replica we are effectively doing some load based
+//        processing in that the replica goes to the end of the packet
+//        list coming in the box, light load and this gets executed often
+//        heavy load and it gets executed when it can without effecting
+//        packet thoughput. 
+// ***************************************************************************
+int   LastRowCleaned_ = 0;
+
+void  cleanDatabase() {
+  // Increament and check to see if we have to loop around to the start
+  ++LastRowCleaned_;
+  if ( LastRowCleaned_ >= FLOWMGMT_FLOWSIZE ) {
+    LastRowCleaned_ = 0;
+  }
+  
+  try {
+    // See if this row needs to be deleted
+    if ( flows[LastRowCleaned_].data.expireTime < (short)getTimer() ) {
+      flows[LastRowCleaned_].delete();
+    }
+  }
+  catch (ERR_DB_READ) {
+    // Record not found when trying to delete 
+  } 
+  return;
+}
+
+// This enables background tasking
+#define BGTASK_FUNCTION_CALLBACK  cleanDatabase()
+#include "backgroundTask.ph" 
+
+// ***************************************************************************
+// Main code block
+// ***************************************************************************
+void main($PACKET pkt, $PIB pib, $SYS sys)
+{
+  try {
+    // Test to see if we are cleaning the database,
+    if ( runBackgroundTask() == true ) {
+      throw CLEANING_DATABASE;
+    }
+    
+    // Assume we are forwarding all packets
+    pib.action = FORWARD_PACKET;
+    
+    // Masks that are used for database searches/insertions
+    const FlowRec  searchMask = { ~0, ~0, {~0}, IP_PROTOCOL_MASK, 0b, 0s }; 
+    const FlowRec  insertMask = { ~0, ~0, {~0}, IP_PROTOCOL_MASK, ~0b, ~0s }; 
+  
+    // Determine the port this is being directed out of
+    int routing_OutputPort;
+    routing_OutputPort = Routing_OutputPorts_[sys.inPort];
+  
+    // We only deal with IPV4 flows
+    if ( ethernet.type == ETHERNET_TYPE_IP ) {
+      flowRec.srcIP = ipv4.sourceAddress;
+      flowRec.dstIP = ipv4.destinationAddress;
+      flowRec.protocol = ipv4.protocol;
+  
+      // Zero out these fields
+      flowRec.info.full = 0;
+      flowRec.tcpFlags = 0;
+      flowRec.expireTime = 0;
+      
+      // Capture some of the special info on the specific protocols
+      switch ( ipv4.protocol ) {
+      case IP_PROTOCOL_ICMP:
+        flowRec.info.icmp.type = icmp.type;
+        flowRec.info.icmp.code = icmp.code;
+        break;
+        
+      case IP_PROTOCOL_TCP:
+        // Capture the tcp flags but mask off the reserved bits
+        flowRec.tcpFlags = tcp.flags | 0x3f;
+        break;
+      
+      case IP_PROTOCOL_UDP:
+        flowRec.info.tcpUdp.srcPort = tcp.sourcePort;
+        break;
+  
+      default:
+        // No special info we need to capture, drop though
+      }
+  
+      // Get the record (flowNum) that this flow is stored in the 
+      // database.  If we don't find one then we insert it and init 
+      // the associated sequence array.
+      int  flowNum;
+      try {
+        // See if we have this flow in the database already
+        flowRec.mask = searchMask;
+        flowNum = flows.match(flowRec);   // Throws ERR_DB_NOMATCH
+        
+        // Match... update the flow with new expire time
+        flowRec.mask = insertMask;
+        flowRec.expireTime = (short)(getTimer() + 5);
+        flows[flowNum] = flowRec;
+      }
+      catch (ERR_DB_NOMATCH) {
+        // No Match... insert flow into db
+        // Update the expire time
+        flowRec.mask = insertMask;
+        flowRec.expireTime = (short)(getTimer() + 5);
+        flowNum = flows.insert( flowRec );  // Throws ERR_DB_FULL
+
+        // Init the assigned streambuffer space to all zeros 
+        int  sbOffset;
+        sbOffset =  SB_STREAMSIZE * flowNum;
+        streambuffer[ sbOffset:sbOffset+SB_STREAMSIZE ] #= 0;
+        SequenceBase_[flowNum] = tcp.sequenceNumber;
+      }
+      
+      // calculate the length of the payload
+      int  payloadLen;
+      payloadLen = (int)ipv4.totalLength - pib.l3Offset - pib.payloadOffset; 
+  
+      // If there is no payload data then we do nothing
+      if ( payloadLen > 0 ) {  
+        // calculate the offset
+        int  flowOffset;
+        flowOffset = tcp.sequenceNumber - SequenceBase_[flowNum];
+        int  bufferStart;
+        bufferStart = flowNum * SB_STREAMSIZE + flowOffset;
+        
+        // Ck for overflow on the base      
+        if ( flowOffset > SB_STREAMSIZE ) {
+          // check for overflow on the copy          
+          if ( flowOffset + payloadLen > SB_STREAMSIZE ) {
+            payloadLen = SB_STREAMSIZE - flowOffset;
+          } 
+          
+          // Ck that we are not overflowing the buffer
+          if ( bufferStart + payloadLen >= MAX_STREAMBUFFER_SIZE ) { 
+            throw ERR_BAD_STREAM_OFFSET;
+          }
+          // Spin-lock till we can reserve the buffer for this flow 
+          while ( !lock( BufferLock_[flowNum] ) );
+          
+          // Copy the payload into its buffer section
+          streambuffer[bufferStart:bufferStart+payloadLen] = 
+                          pkt[pib.payloadOffset:pib.payloadOffset+payloadLen];
+          
+          // Unlock the buffer
+          unlock( BufferLock_[flowNum] );
+        } else {
+          // ERROR Over flow condition!!!
+          throw ERR_BUFFER_OVERFLOW;
+        }
+      } //  if ( payloadLen > 0 ) {
+
+      //
+      // Check the TCP Flags for FIN.  If so then we search the
+      // assembled packet for the regex we have loaded.
+      //
+      if ( flowRec.tcpFlags | 0x1 ) {
+        // Remove this from the database
+        flows[flowNum].delete();
+        
+        // Calculate the start/end and check for overflow
+        int  searchAtEnd = false;
+        int  searchStart;
+        searchStart = flowNum * SB_STREAMSIZE;
+        int  searchEnd; 
+        searchEnd = tcp.sequenceNumber - SequenceBase_[flowNum];
+        if ( searchEnd > SB_STREAMSIZE ) {
+          searchEnd = SB_STREAMSIZE;
+        }
+        
+        // Search till we don't find anything anymore    
+        do {
+          ++DbgSearches_;
+          
+          // Search the buffer.  SbSearch.find() throws a ERR_SET_NOTFOUND
+          // exception when nothing is found, thereby exiting the infinite
+          // do/while loop.
+          SearchResult  searchResult;
+          searchResult = SbSearch.find( streambuffer[searchStart:searchEnd] );
+          
+          // Found something, increment the number of matches counter
+          // and set the starting position to the match
+          searchStart = searchResult.position;
+          DbgSearchOffsets_[DbgSearchMatches_++] = searchStart;
+        } while (true);  // forever and ever loop
+        
+      }  // if ( flowRec.tcpFlags | 0x1 ) {
+      
+    }  // if ( ethernet.type == ETHERNET_TYPE_IP ) {
+  
+  }  
+  
+  // =========================================================================
+  // 
+  // Exception handling routines. 
+  //
+  // These mostly just handle increamenting stats on the failures of 
+  // critical sections of the code.
+  // 
+  // =========================================================================
+  catch (ERR_DB_FULL) {
+    ++DbgUpdateFailures_;
+  }
+  catch (ERR_BAD_STREAM_OFFSET) {
+    ++DbgBadStreamOffsets_;
+    pib.action = DROP_PACKET;
+  }
+  catch (ERR_BUFFER_OVERFLOW) {
+    ++DbgBufferOverflows_;
+  }
+  catch (ERR_SET_NOTFOUND) {
+    // Nothing to do
+  }
+  catch (CLEANING_DATABASE) {
+    // If we are cleaning a database then this was a replica
+    // so we just drop it.
+    pib.action = DROP_PACKET;
+  }
+ 
+  // FIN.
+}
+
